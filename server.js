@@ -34,6 +34,24 @@ async function initDB() {
         updated_at TEXT
       )
     `);
+    
+await client.execute(`
+  CREATE TABLE IF NOT EXISTS hazard_zones (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    hazard_type TEXT NOT NULL DEFAULT 'flood',
+    severity TEXT NOT NULL DEFAULT 'high',
+    status TEXT NOT NULL DEFAULT 'active',
+    city TEXT,
+    latitude REAL NOT NULL,
+    longitude REAL NOT NULL,
+    radius_meters REAL DEFAULT 500,
+    coordinates TEXT,
+    description TEXT,
+    created_by TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )
+`);
 
     // Add missing columns to incidents if old table exists (so Report works)
     try { await client.execute(`ALTER TABLE incidents ADD COLUMN severity TEXT`); } catch {}
@@ -244,6 +262,198 @@ app.get("/api/alerts", async (req,res)=>{
   const r = await client.execute("SELECT * FROM alerts ORDER BY created_at DESC");
   res.json(r.rows);
 });
+
+app.get("/api/resources", async (req, res) => {
+  try {
+    const r = await client.execute("SELECT * FROM resources ORDER BY created_at DESC");
+    res.json(r.rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+/** --- HAZARD ZONES --- **/
+app.get("/api/hazards", async (req, res) => {
+  try {
+    const result = await client.execute(
+      "SELECT * FROM hazard_zones ORDER BY created_at DESC"
+    );
+
+    res.json(
+      result.rows.map((row) => ({
+        ...row,
+        coordinates: row.coordinates
+          ? JSON.parse(row.coordinates)
+          : null,
+      }))
+    );
+  } catch (error) {
+    console.error("Error fetching hazard zones:", error.message);
+    res.status(500).json({ error: "Failed to fetch hazard zones." });
+  }
+});
+
+
+app.post("/api/hazards", async (req, res) => {
+  try {
+    const {
+      id,
+      name,
+      hazard_type,
+      severity,
+      status,
+      city,
+      latitude,
+      longitude,
+      radius_meters,
+      coordinates,
+      description,
+      created_by,
+    } = req.body;
+
+    if (
+      !name ||
+      latitude == null ||
+      longitude == null ||
+      !Number.isFinite(Number(latitude)) ||
+      !Number.isFinite(Number(longitude)) ||
+      Number(latitude) < -90 ||
+      Number(latitude) > 90 ||
+      Number(longitude) < -180 ||
+      Number(longitude) > 180
+    ) {
+      return res.status(400).json({
+        error: "A name and valid latitude/longitude are required.",
+      });
+    }
+
+    const hazardId = id || `HAZ-${Date.now()}`;
+
+    const savedCoordinates =
+      coordinates == null ? null : JSON.stringify(coordinates);
+
+    await client.execute({
+      sql: `INSERT INTO hazard_zones (
+        id, name, hazard_type, severity, status, city,
+        latitude, longitude, radius_meters, coordinates,
+        description, created_by
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      args: [
+        hazardId,
+        name,
+        hazard_type || "flood",
+        severity || "high",
+        status || "active",
+        city || null,
+        Number(latitude),
+        Number(longitude),
+        radius_meters == null ? 500 : Number(radius_meters),
+        savedCoordinates,
+        description || null,
+        created_by || null,
+      ],
+    });
+
+    res.status(201).json({
+      success: true,
+      message: "Hazard zone saved successfully.",
+      id: hazardId,
+    });
+  } catch (error) {
+    console.error("Error saving hazard zone:", error.message);
+    res.status(500).json({ error: "Failed to save hazard zone." });
+  }
+});
+
+
+app.delete("/api/hazards/:id", async (req, res) => {
+  try {
+    const result = await client.execute({
+      sql: "DELETE FROM hazard_zones WHERE id = ?",
+      args: [req.params.id],
+    });
+
+    if (result.rowsAffected === 0) {
+      return res.status(404).json({
+        error: "Hazard zone not found.",
+      });
+    }
+
+    res.json({
+      success: true,
+      message: "Hazard zone deleted successfully.",
+    });
+  } catch (error) {
+    console.error("Error deleting hazard zone:", error.message);
+    res.status(500).json({
+      error: "Failed to delete hazard zone.",
+    });
+  }
+});
+
+
+app.patch("/api/hazards/:id", async (req, res) => {
+  try {
+    const allowedFields = [
+      "name",
+      "hazard_type",
+      "severity",
+      "status",
+      "city",
+      "latitude",
+      "longitude",
+      "radius_meters",
+      "coordinates",
+      "description",
+    ];
+
+    const updates = [];
+    const values = [];
+
+    for (const field of allowedFields) {
+      if (Object.prototype.hasOwnProperty.call(req.body, field)) {
+        let value = req.body[field];
+
+        if (field === "coordinates" && value !== null) {
+          value = JSON.stringify(value);
+        }
+
+        updates.push(`${field} = ?`);
+        values.push(value);
+      }
+    }
+
+    if (updates.length === 0) {
+      return res.status(400).json({
+        error: "Provide at least one field to update.",
+      });
+    }
+
+    values.push(req.params.id);
+
+    const result = await client.execute({
+      sql: `UPDATE hazard_zones SET ${updates.join(", ")} WHERE id = ?`,
+      args: values,
+    });
+
+    if (result.rowsAffected === 0) {
+      return res.status(404).json({
+        error: "Hazard zone not found.",
+      });
+    }
+
+    res.json({
+      success: true,
+      message: "Hazard zone updated successfully.",
+    });
+  } catch (error) {
+    console.error("Error updating hazard zone:", error.message);
+    res.status(500).json({
+      error: "Failed to update hazard zone.",
+    });
+  }
+});
+
+
+
 
 app.get("/", (req, res) => res.send("✅ DYNAMIC Backend Running! Tables: users, incidents, resources, rescue_units, notifications_read, user_notifications"));
 
