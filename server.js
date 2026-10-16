@@ -148,12 +148,16 @@ app.patch("/api/incidents/:id", async (req, res) => {
 });
 
 // --- RESOURCES ---
+
 app.get("/api/resources", async (req, res) => {
   try {
-    const r = await client.execute("SELECT * FROM resources ORDER BY created_at DESC");
+    const r = await client.execute("SELECT * FROM resources");
     res.json(r.rows);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
+
 
 app.post("/api/resources", async (req, res) => {
   try {
